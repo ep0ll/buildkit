@@ -7,6 +7,10 @@ type pubsub[T any] struct {
 	m  map[*channel[T]]struct{}
 }
 
+func newPubsub[T any]() *pubsub[T] {
+	return &pubsub[T]{m: map[*channel[T]]struct{}{}}
+}
+
 func (p *pubsub[T]) Subscribe() *channel[T] {
 	p.mu.Lock()
 	c := &channel[T]{

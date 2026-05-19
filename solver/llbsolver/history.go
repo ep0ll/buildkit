@@ -9,7 +9,6 @@ import (
 
 	intoto "github.com/in-toto/in-toto-golang/in_toto"
 	controlapi "github.com/moby/buildkit/api/services/control"
-	"github.com/moby/buildkit/client"
 	"github.com/moby/buildkit/errdefs"
 	"github.com/moby/buildkit/executor/resources"
 	"github.com/moby/buildkit/exporter"
@@ -76,7 +75,7 @@ func (s *Solver) recordBuildHistory(ctx context.Context, id string, req frontend
 		defer func() { cancel(errors.WithStack(context.Canceled)) }()
 
 		var mu sync.Mutex
-		ch := make(chan *client.SolveStatus)
+		statusIn := s.history.OpenStatusInput(id)
 		eg, ctx2 := errgroup.WithContext(ctx)
 		var releasers []func()
 
@@ -183,7 +182,12 @@ func (s *Solver) recordBuildHistory(ctx context.Context, id string, req frontend
 		}
 
 		eg.Go(func() error {
-			st, releaseStatus, err := s.history.ImportStatus(ctx2, ch)
+			err := j.Status(ctx2, statusIn)
+			s.history.CloseStatusInput(id)
+			return err
+		})
+		eg.Go(func() error {
+			st, releaseStatus, err := s.history.ImportStatusFromPipeline(ctx2, id)
 			if err != nil {
 				return err
 			}
@@ -200,9 +204,6 @@ func (s *Solver) recordBuildHistory(ctx context.Context, id string, req frontend
 			rec.NumWarnings = int32(st.NumWarnings)
 			mu.Unlock()
 			return nil
-		})
-		eg.Go(func() error {
-			return j.Status(ctx2, ch)
 		})
 
 		setDeprecated := true
