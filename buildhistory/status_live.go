@@ -1,10 +1,11 @@
-package history
+package buildhistory
 
 import (
 	"context"
 	"sync"
 
 	controlapi "github.com/moby/buildkit/api/services/control"
+	"github.com/moby/buildkit/buildhistory/internal/pubsub"
 	"github.com/moby/buildkit/client"
 )
 
@@ -13,7 +14,7 @@ type statusPipeline struct {
 	mu sync.Mutex
 
 	in     chan *client.SolveStatus
-	events *pubsub[*controlapi.StatusResponse]
+	events *pubsub.Pubsub[*controlapi.StatusResponse]
 	done   chan struct{}
 
 	frames [][]byte
@@ -22,7 +23,7 @@ type statusPipeline struct {
 func newStatusPipeline() *statusPipeline {
 	p := &statusPipeline{
 		in:     make(chan *client.SolveStatus, 32),
-		events: newPubsub[*controlapi.StatusResponse](),
+		events: pubsub.New[*controlapi.StatusResponse](),
 		done:   make(chan struct{}),
 	}
 	go p.run()
@@ -76,7 +77,7 @@ func (p *statusPipeline) Close() {
 	close(p.in)
 }
 
-func (p *statusPipeline) Subscribe() *channel[*controlapi.StatusResponse] {
+func (p *statusPipeline) Subscribe() *pubsub.Channel[*controlapi.StatusResponse] {
 	return p.events.Subscribe()
 }
 
@@ -124,18 +125,18 @@ func (q *Queue) streamLiveStatus(ctx context.Context, ref string, out chan<- *cl
 		return nil
 	}
 	sub := p.Subscribe()
-	defer sub.close()
+	defer sub.Close()
 
 	for {
 		select {
 		case <-ctx.Done():
 			return context.Cause(ctx)
-		case msg, ok := <-sub.ch:
+		case msg, ok := <-sub.Ch:
 			if !ok {
 				return nil
 			}
 			out <- client.NewSolveStatus(msg)
-		case <-sub.done:
+		case <-sub.Done:
 			return nil
 		}
 	}

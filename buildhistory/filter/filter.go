@@ -1,4 +1,5 @@
-package history
+// Package filter implements build-history query filters for control API clients.
+package filter
 
 import (
 	"slices"
@@ -19,7 +20,8 @@ const (
 	statusCanceled  = "canceled"
 )
 
-func filterHistoryEvents(in []*controlapi.BuildHistoryEvent, filters []string, limit int32) ([]*controlapi.BuildHistoryEvent, error) {
+// Events returns events matching filters, optionally limited to the newest N.
+func Events(in []*controlapi.BuildHistoryEvent, filters []string, limit int32) ([]*controlapi.BuildHistoryEvent, error) {
 	f, err := parseFilters(filters)
 	if err != nil {
 		return nil, err

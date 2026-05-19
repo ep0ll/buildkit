@@ -21,7 +21,7 @@ import (
 	"github.com/moby/buildkit/session"
 	"github.com/moby/buildkit/solver"
 	"github.com/moby/buildkit/solver/llbsolver/compat"
-	"github.com/moby/buildkit/solver/llbsolver/history"
+	"github.com/moby/buildkit/buildhistory"
 	"github.com/moby/buildkit/solver/result"
 	spb "github.com/moby/buildkit/sourcepolicy/pb"
 	"github.com/moby/buildkit/util/entitlements"
@@ -57,7 +57,7 @@ type Opt struct {
 	GatewayForwarder *controlgateway.GatewayForwarder
 	SessionManager   *session.Manager
 	WorkerController *worker.Controller
-	HistoryQueue     *history.Queue
+	HistoryQueue     *buildhistory.Queue
 	ResourceMonitor  *resources.Monitor
 	ProvenanceEnv    map[string]any
 }
@@ -72,7 +72,7 @@ type Solver struct {
 	gatewayForwarder          *controlgateway.GatewayForwarder
 	sm                        *session.Manager
 	entitlements              []string
-	history                   *history.Queue
+	history                   *buildhistory.Queue
 	sysSampler                *resources.Sampler[*resourcestypes.SysSample]
 	provenanceEnv             map[string]any
 	provenanceStore           *provenanceStore

@@ -1,4 +1,4 @@
-package history
+package filter
 
 import (
 	"testing"
@@ -131,7 +131,7 @@ func TestHistoryFilters(t *testing.T) {
 
 	for _, tcase := range tcases {
 		t.Run(tcase.name, func(t *testing.T) {
-			out, err := filterHistoryEvents(testRecords, tcase.filters, tcase.limit)
+			out, err := Events(testRecords, tcase.filters, tcase.limit)
 			if tcase.err != "" {
 				require.Error(t, err)
 				require.Contains(t, err.Error(), tcase.err)

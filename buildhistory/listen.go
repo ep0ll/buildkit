@@ -1,10 +1,12 @@
-package history
+package buildhistory
 
 import (
 	"context"
 	"os"
 
 	controlapi "github.com/moby/buildkit/api/services/control"
+	"github.com/moby/buildkit/buildhistory/filter"
+	"github.com/moby/buildkit/buildhistory/internal/pubsub"
 	"github.com/pkg/errors"
 	bolt "go.etcd.io/bbolt"
 )
@@ -30,11 +32,11 @@ func (q *Queue) Listen(ctx context.Context, req *controlapi.BuildHistoryRequest,
 }
 
 type listenSubscription struct {
-	events *channel[*controlapi.BuildHistoryEvent]
+	events *pubsub.Channel[*controlapi.BuildHistoryEvent]
 }
 
 func (s *listenSubscription) close() {
-	s.events.close()
+	s.events.Close()
 }
 
 func (q *Queue) prepareListen(req *controlapi.BuildHistoryRequest) (*listenSubscription, func(), error) {
@@ -103,7 +105,7 @@ func (q *Queue) emitStoredEvents(req *controlapi.BuildHistoryRequest, emit func(
 		return err
 	}
 	events = q.filterPendingDeletes(events)
-	events, err = filterHistoryEvents(events, req.Filter, req.Limit)
+	events, err = filter.Events(events, req.Filter, req.Limit)
 	if err != nil {
 		return err
 	}
@@ -160,14 +162,14 @@ func (q *Queue) streamEvents(ctx context.Context, req *controlapi.BuildHistoryRe
 		select {
 		case <-ctx.Done():
 			return context.Cause(ctx)
-		case e := <-sub.events.ch:
+		case e := <-sub.events.Ch:
 			if !matchesRef(req.Ref, e.Record.Ref) {
 				continue
 			}
 			if err := emit(e); err != nil {
 				return err
 			}
-		case <-sub.events.done:
+		case <-sub.events.Done:
 			return nil
 		}
 	}

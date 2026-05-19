@@ -1,4 +1,4 @@
-package history
+package buildhistory
 
 import (
 	"context"
@@ -30,7 +30,7 @@ func (q *Queue) Update(ctx context.Context, e *controlapi.BuildHistoryEvent) err
 func (q *Queue) handleBuildStarted(e *controlapi.BuildHistoryEvent) error {
 	q.active[e.Record.Ref] = e.Record
 	q.events.Send(e)
-	return nil
+	return q.runOnEvent(context.Background(), e)
 }
 
 func (q *Queue) handleBuildCompleted(ctx context.Context, e *controlapi.BuildHistoryEvent) error {
@@ -39,6 +39,13 @@ func (q *Queue) handleBuildCompleted(ctx context.Context, e *controlapi.BuildHis
 		return err
 	}
 	q.events.Send(e)
+	return q.runOnEvent(ctx, e)
+}
+
+func (q *Queue) runOnEvent(ctx context.Context, e *controlapi.BuildHistoryEvent) error {
+	if fn := q.opt.Hooks.OnEvent; fn != nil {
+		return fn(ctx, e)
+	}
 	return nil
 }
 

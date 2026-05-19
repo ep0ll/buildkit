@@ -1,4 +1,4 @@
-package history
+package buildhistory
 
 import (
 	"context"
@@ -28,6 +28,11 @@ func (q *Queue) deleteRecord(ref string) (bool, error) {
 	if q.isRecordInUse(ref) {
 		q.pendingDel[ref] = struct{}{}
 		return false, nil
+	}
+	if fn := q.opt.Hooks.BeforeDelete; fn != nil {
+		if err := fn(context.Background(), ref); err != nil {
+			return false, err
+		}
 	}
 	delete(q.pendingDel, ref)
 	q.events.Send(&controlapi.BuildHistoryEvent{

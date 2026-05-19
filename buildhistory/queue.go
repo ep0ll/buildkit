@@ -1,10 +1,11 @@
-package history
+package buildhistory
 
 import (
 	"strconv"
 	"time"
 
 	controlapi "github.com/moby/buildkit/api/services/control"
+	"github.com/moby/buildkit/buildhistory/internal/pubsub"
 	"github.com/pkg/errors"
 	bolt "go.etcd.io/bbolt"
 )
@@ -34,7 +35,7 @@ func normalizeQueueOpt(opt QueueOpt) QueueOpt {
 func newQueue(opt QueueOpt) (*Queue, error) {
 	q := &Queue{
 		opt:        opt,
-		events:     newPubsub[*controlapi.BuildHistoryEvent](),
+		events:     pubsub.New[*controlapi.BuildHistoryEvent](),
 		active:     map[string]*controlapi.BuildHistoryRecord{},
 		finalizers: map[string]*recordFinalizer{},
 		refLocks:   map[string]int{},
