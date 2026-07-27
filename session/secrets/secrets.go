@@ -62,16 +62,37 @@ type scopeContextKeyT struct{}
 
 var scopeContextKey = scopeContextKeyT{}
 
-// WithScope attaches a secrets Scope to ctx. Any GetSecret call made with a
-// context derived from the result will be filtered through it. Passing a
-// nil scope is a no-op (falls back to unrestricted access), and an already
-// present scope in ctx is replaced, so nested calls to WithScope correctly
-// re-scope for deeper levels of nested builds.
+// WithScope narrows ctx's secrets Scope to the intersection of the existing
+// scope (if any) and the new one. A nested build can only ever see a
+// subset of what its ancestor already allowed — it cannot escalate its own
+// access by setting Full on its own attributes if an ancestor restricted it.
 func WithScope(ctx context.Context, scope *Scope) context.Context {
 	if scope == nil {
 		return ctx
 	}
+	if parent, ok := ScopeFromContext(ctx); ok {
+		scope = intersect(parent, scope)
+	}
 	return context.WithValue(ctx, scopeContextKey, scope)
+}
+
+func intersect(a, b *Scope) *Scope {
+	switch {
+	case a.Full && b.Full:
+		return &Scope{Full: true}
+	case a.Full:
+		return b // b is at least as strict as a
+	case b.Full:
+		return a // a is at least as strict as b
+	default:
+		out := &Scope{Allowed: map[string]struct{}{}}
+		for id := range a.Allowed {
+			if _, ok := b.Allowed[id]; ok {
+				out.Allowed[id] = struct{}{}
+			}
+		}
+		return out
+	}
 }
 
 // ScopeFromContext returns the secrets Scope attached to ctx, if any.
