@@ -32,6 +32,14 @@ type Builder interface {
 	Build(ctx context.Context, e Edge) (CachedResultWithProvenance, error)
 	InContext(ctx context.Context, f func(ctx context.Context, jobCtx JobContext) error) error
 	EachValue(ctx context.Context, key string, fn func(any) error) error
+	// SetCallerManager stores a session.CallerManager (typically a
+	// *secrets.FilteredManager) for this builder so that ops resolved within
+	// its graph receive a scoped session manager via jobCtx.CallerManager(),
+	// rather than the global unrestricted *session.Manager.
+	SetCallerManager(session.CallerManager)
+	// CallerManager returns the scoped session manager set via SetCallerManager,
+	// or nil if none has been set (top-level build path).
+	CallerManager() session.CallerManager
 }
 
 // Solver provides a shared graph of all the vertexes currently being
@@ -76,6 +84,10 @@ type state struct {
 	metadata  VertexMetadata
 	solver    *Solver
 }
+
+// CallerManager returns nil for the shared state; the per-build
+// CallerManager is delivered via subBuilder → filteredJobContext.
+func (s *state) CallerManager() session.CallerManager { return nil }
 
 func (s *state) Session() session.Group {
 	return s
@@ -331,8 +343,26 @@ func (s *state) Release() {
 
 type subBuilder struct {
 	*state
-	mu        sync.Mutex
-	exporters []ExportableCacheKey
+	mu            sync.Mutex
+	exporters     []ExportableCacheKey
+	callerManager session.CallerManager // set by provenanceBridge.Solve for nested builds
+}
+
+// SetCallerManager stores a CallerManager (typically *secrets.FilteredManager)
+// on this subBuilder. All ops resolved within this builder's graph will read
+// it via jobCtx.CallerManager() and use it instead of the global sm.
+func (sb *subBuilder) SetCallerManager(cm session.CallerManager) {
+	sb.mu.Lock()
+	sb.callerManager = cm
+	sb.mu.Unlock()
+}
+
+// CallerManager returns the scoped session manager for this subbuild, or nil
+// if this is a top-level build without a restricted manager.
+func (sb *subBuilder) CallerManager() session.CallerManager {
+	sb.mu.Lock()
+	defer sb.mu.Unlock()
+	return sb.callerManager
 }
 
 func (sb *subBuilder) Build(ctx context.Context, e Edge) (CachedResultWithProvenance, error) {
@@ -346,12 +376,30 @@ func (sb *subBuilder) Build(ctx context.Context, e Edge) (CachedResultWithProven
 	return &withProvenance{CachedResult: res}, nil
 }
 
+// filteredJobContext wraps a *state JobContext and overrides CallerManager()
+// with the subBuilder's per-build manager so ops receive it explicitly.
+type filteredJobContext struct {
+	*state
+	cm session.CallerManager
+}
+
+func (fjc *filteredJobContext) CallerManager() session.CallerManager { return fjc.cm }
+
 func (sb *subBuilder) InContext(ctx context.Context, f func(context.Context, JobContext) error) error {
 	ctx = progress.WithProgress(ctx, sb.mpw)
 	if sb.mspan.Span != nil {
 		ctx = trace.ContextWithSpan(ctx, sb.mspan)
 	}
-	return f(ctx, sb.state)
+	sb.mu.Lock()
+	cm := sb.callerManager
+	sb.mu.Unlock()
+	var jc JobContext
+	if cm != nil {
+		jc = &filteredJobContext{state: sb.state, cm: cm}
+	} else {
+		jc = sb.state
+	}
+	return f(ctx, jc)
 }
 
 func (sb *subBuilder) EachValue(ctx context.Context, key string, fn func(any) error) error {
@@ -782,6 +830,15 @@ func (jl *Solver) deleteIfUnreferenced(k digest.Digest, st *state) {
 	}
 }
 
+// SetCallerManager is a no-op on *Job (the top-level path). Per-build
+// CallerManagers are stored on subBuilder which is the Builder used for
+// nested builds resolved through provenanceBridge.Solve.
+func (j *Job) SetCallerManager(session.CallerManager) {}
+
+// CallerManager returns nil for the top-level Job; nested builds use
+// subBuilder which holds the per-build FilteredManager.
+func (j *Job) CallerManager() session.CallerManager { return nil }
+
 func (j *Job) Build(ctx context.Context, e Edge) (CachedResultWithProvenance, error) {
 	if span := trace.SpanFromContext(ctx); span.SpanContext().IsValid() {
 		j.mu.Lock()
@@ -936,6 +993,7 @@ func (j *Job) InContext(ctx context.Context, f func(context.Context, JobContext)
 func (j *Job) Session() session.Group {
 	return session.NewGroup(j.SessionID)
 }
+
 
 func (j *Job) Cleanup(fn func() error) error {
 	j.mu.Lock()

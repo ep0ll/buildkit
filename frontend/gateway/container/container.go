@@ -90,7 +90,7 @@ func NewContainer(ctx context.Context, cm cache.Manager, exec executor.Executor,
 
 	name := fmt.Sprintf("container %s", req.ContainerID)
 	mm := mounts.NewMountManager(name, cm, sm)
-	p, err := PrepareMounts(ctx, mm, cm, g, "", mnts, refs, func(m *opspb.Mount, ref cache.ImmutableRef) (cache.MutableRef, error) {
+	p, err := PrepareMounts(ctx, mm, sm, cm, g, "", mnts, refs, func(m *opspb.Mount, ref cache.ImmutableRef) (cache.MutableRef, error) {
 		if m.Input != int64(opspb.Empty) {
 			cm = refs[m.Input].Worker.CacheManager()
 		}
@@ -168,7 +168,7 @@ type MountMutableRef struct {
 
 type MakeMutable func(m *opspb.Mount, ref cache.ImmutableRef) (cache.MutableRef, error)
 
-func PrepareMounts(ctx context.Context, mm *mounts.MountManager, cm cache.Manager, g session.Group, cwd string, mnts []*opspb.Mount, refs []*worker.WorkerRef, makeMutable MakeMutable, platform string) (p PreparedMounts, err error) {
+func PrepareMounts(ctx context.Context, mm *mounts.MountManager, sm session.CallerManager, cm cache.Manager, g session.Group, cwd string, mnts []*opspb.Mount, refs []*worker.WorkerRef, makeMutable MakeMutable, platform string) (p PreparedMounts, err error) {
 	// loop over all mounts, fill in mounts, root and outputs
 	for i, m := range mnts {
 		var (
@@ -246,7 +246,7 @@ func PrepareMounts(ctx context.Context, mm *mounts.MountManager, cm cache.Manage
 			mountable = mm.MountableTmpFS(m)
 		case opspb.MountType_SECRET:
 			var err error
-			mountable, err = mm.MountableSecret(ctx, m, g)
+			mountable, err = mm.MountableSecret(ctx, sm, m, g)
 			if err != nil {
 				return p, err
 			}
@@ -414,7 +414,7 @@ func (gwCtr *gatewayContainer) loadSecretEnv(ctx context.Context, secretEnv []*o
 		var dt []byte
 		var err error
 		err = gwCtr.sm.Any(ctx, gwCtr.group, func(ctx context.Context, _ string, caller session.Caller) error {
-			dt, err = secrets.GetSecret(ctx, caller, id)
+			dt, err = secrets.GetSecretFromCaller(ctx, caller, id)
 			if err != nil {
 				return err
 			}

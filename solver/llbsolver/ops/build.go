@@ -10,6 +10,7 @@ import (
 	"github.com/containerd/continuity/fs"
 	"github.com/moby/buildkit/client/llb"
 	"github.com/moby/buildkit/frontend"
+	"github.com/moby/buildkit/session"
 	"github.com/moby/buildkit/session/secrets"
 	"github.com/moby/buildkit/snapshot"
 	"github.com/moby/buildkit/solver"
@@ -51,11 +52,12 @@ type BuildOp struct {
 	op *pb.BuildOp
 	b  frontend.FrontendLLBBridge
 	v  solver.Vertex
+	sm session.CallerManager
 }
 
 var _ solver.Op = &BuildOp{}
 
-func NewBuildOp(v solver.Vertex, op *pb.Op_Build, b frontend.FrontendLLBBridge, _ worker.Worker) (*BuildOp, error) {
+func NewBuildOp(v solver.Vertex, op *pb.Op_Build, b frontend.FrontendLLBBridge, _ worker.Worker, sm session.CallerManager) (*BuildOp, error) {
 	if err := opsutils.Validate(&pb.Op{Op: op}); err != nil {
 		return nil, err
 	}
@@ -63,6 +65,7 @@ func NewBuildOp(v solver.Vertex, op *pb.Op_Build, b frontend.FrontendLLBBridge, 
 		op: op.Build,
 		b:  b,
 		v:  v,
+		sm: sm,
 	}, nil
 }
 
@@ -213,23 +216,42 @@ func (b *BuildOp) Exec(ctx context.Context, job solver.JobContext, inputs []solv
 	lm.Unmount()
 	lm = nil
 
-	// Compute the effective scope for the nested build by intersecting the
-	// parent's scope (if any) with what this BuildOp declares. This ensures
-	// access can only shrink through nesting, never grow.
+	// Compute the effective scope for the nested build.
+	// The parent scope comes from b.sm if it is already a *FilteredManager
+	// (injected by the builder at construction via the resolver); otherwise
+	// the top-level build has no scope restriction.
 	childScope := b.secretsScope()
-	if parent, ok := secrets.ScopeFromContext(ctx); ok {
-		childScope = secrets.Intersect(parent, childScope)
+	var parentScope *secrets.Scope
+	if fm, ok := b.sm.(*secrets.FilteredManager); ok {
+		parentScope = fm.EffectiveScope()
+	}
+	if parentScope != nil {
+		childScope = secrets.Intersect(parentScope, childScope)
 	}
 
-	// Layer 1 — context: stamp the scope on ctx so any op inside the nested
-	// build that receives this context already has the restriction applied.
-	// This covers the common case where ctx is properly propagated.
-	ctx = secrets.WithScope(ctx, childScope)
+	// Build a FilteredManager for the nested build and pass it to the bridge
+	// via SolveRequest.FilteredSession. The bridge calls
+	// b.builder.SetCallerManager(req.FilteredSession), which injects it into
+	// the subBuilder so every op receives a *FilteredCaller from
+	// jobCtx.CallerManager() — independent of context values.
+	var filteredMgr *secrets.FilteredManager
+	if b.sm != nil {
+		var realSM *session.Manager
+		if fm, ok := b.sm.(*secrets.FilteredManager); ok {
+			realSM = fm.Inner()
+		} else if sm, ok := b.sm.(*session.Manager); ok {
+			realSM = sm
+		}
+		if realSM != nil {
+			filteredMgr = secrets.NewFilteredManager(realSM, childScope, parentScope)
+		}
+	}
 
 	newRes, err := b.b.Solve(ctx, frontend.SolveRequest{
-		Definition:  def.ToPB(),
-		SecretScope: childScope, // Layer 2 — transport: bridge re-stamps ctx even when ops use a fresh context
+		Definition:      def.ToPB(),
+		FilteredSession: filteredMgr, // bridge will call SetCallerManager(filteredMgr)
 	}, g.SessionIterator().NextSession())
+
 	if err != nil {
 		return nil, err
 	}

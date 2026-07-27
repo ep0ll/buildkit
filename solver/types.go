@@ -185,6 +185,11 @@ type Op interface {
 type JobContext interface {
 	// Session returns the session group associated with the clients building current step.
 	Session() session.Group
+	// CallerManager returns the session.CallerManager for this build step.
+	// For nested builds this will be a *secrets.FilteredManager that restricts
+	// secret access at the gRPC transport level — independent of context values.
+	// For top-level builds it returns nil (callers fall back to their own sm).
+	CallerManager() session.CallerManager
 	// Cleanup adds a function that is called when the job is done. This can be used to associate
 	// resources with the job and keep them from being released until the job is done.
 	Cleanup(func() error) error

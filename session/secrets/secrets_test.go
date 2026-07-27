@@ -144,34 +144,29 @@ func TestIntersect_AliasDroppedWhenParentNotInResult(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// WithScope — nesting cannot escalate
+// Intersect — nesting cannot escalate
 // ---------------------------------------------------------------------------
 
-func TestWithScope_NestingCannotGrow(t *testing.T) {
+func TestIntersect_NestingCannotGrow(t *testing.T) {
 	// Parent allows only "a".
 	parent := NewScope([]string{"a"}, false, nil)
-	ctx := WithScope(context.Background(), parent)
 
 	// Child tries to grant "a" and "b".
 	child := NewScope([]string{"a", "b"}, false, nil)
-	ctx = WithScope(ctx, child)
 
-	effective, ok := ScopeFromContext(ctx)
-	require.True(t, ok)
+	// Nesting is modeled as Intersect(parent, child).
+	effective := Intersect(parent, child)
 	require.True(t, effective.Allows("a"))
 	require.False(t, effective.Allows("b"), "child cannot escalate beyond parent's allow-list")
 }
 
-func TestWithScope_FullChildDoesNotEscalateRestrictedParent(t *testing.T) {
+func TestIntersect_FullChildDoesNotEscalateRestrictedParent(t *testing.T) {
 	parent := NewScope([]string{"limited"}, false, nil)
-	ctx := WithScope(context.Background(), parent)
 
-	// Child claims Full — must be intersected down.
+	// Child claims Full — must be intersected down to parent's restriction.
 	child := NewScope(nil, true, nil)
-	ctx = WithScope(ctx, child)
 
-	effective, ok := ScopeFromContext(ctx)
-	require.True(t, ok)
+	effective := Intersect(parent, child)
 	require.False(t, effective.Full, "Full child must not override restricted parent")
 	require.True(t, effective.Allows("limited"))
 	require.False(t, effective.Allows("other"))

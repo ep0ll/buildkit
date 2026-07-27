@@ -342,3 +342,7 @@ func (j *jobCtx) ResolverCache() solver.ResolverCache {
 func (j *jobCtx) CompatibilityVersion() (int, error) {
 	return 0, nil
 }
+
+func (j *jobCtx) CallerManager() session.CallerManager {
+	return nil
+}

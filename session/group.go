@@ -11,12 +11,25 @@ import (
 // active session IDs.
 var ErrNoActiveSessions = errors.New("no active sessions")
 
+// Group is the interface for a set of active sessions.
 type Group interface {
 	SessionIterator() Iterator
 }
+
+// Iterator iterates over session IDs in a Group.
 type Iterator interface {
 	NextSession() string
 }
+
+// CallerManager is the minimal interface on top of *Manager that ops use when
+// they need to call a session caller (e.g. to fetch secrets). Defining it as
+// an interface instead of a concrete *Manager allows subbuild paths to inject
+// a scope-restricted FilteredManager so that secret access is enforced at the
+// object level, independent of the context that is passed.
+type CallerManager interface {
+	Any(ctx context.Context, g Group, f func(context.Context, string, Caller) error) error
+}
+
 
 func NewGroup(ids ...string) Group {
 	return &group{ids: ids}

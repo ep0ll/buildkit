@@ -42,7 +42,7 @@ type ExecOp struct {
 	op             *pb.ExecOp
 	cm             cache.Manager
 	mm             *mounts.MountManager
-	sm             *session.Manager
+	sm             session.CallerManager
 	exec           executor.Executor
 	w              worker.Worker
 	platform       *pb.Platform
@@ -57,7 +57,7 @@ type ExecOp struct {
 
 var _ solver.Op = &ExecOp{}
 
-func NewExecOp(v solver.Vertex, op *pb.Op_Exec, platform *pb.Platform, cm cache.Manager, parallelism *semaphore.Weighted, sm *session.Manager, exec executor.Executor, w worker.Worker, linuxResources *pb.LinuxResources, proxyNetwork bool) (*ExecOp, error) {
+func NewExecOp(v solver.Vertex, op *pb.Op_Exec, platform *pb.Platform, cm cache.Manager, parallelism *semaphore.Weighted, sm session.CallerManager, exec executor.Executor, w worker.Worker, linuxResources *pb.LinuxResources, proxyNetwork bool) (*ExecOp, error) {
 	if err := opsutils.Validate(&pb.Op{Op: op}); err != nil {
 		return nil, err
 	}
@@ -386,7 +386,14 @@ func (e *ExecOp) Exec(ctx context.Context, jobCtx solver.JobContext, inputs []so
 		platformOS = e.platform.OS
 	}
 	g := jobCtx.Session()
-	p, err := container.PrepareMounts(ctx, e.mm, e.cm, g, e.op.Meta.Cwd, e.op.Mounts, refs, func(m *pb.Mount, ref cache.ImmutableRef) (cache.MutableRef, error) {
+	// Get the per-build CallerManager (a *FilteredManager for subbuilds, or
+	// nil for top-level builds). When non-nil every Caller returned from Any
+	// is a *FilteredCaller with scope enforced at the gRPC transport layer.
+	cm := jobCtx.CallerManager()
+	if cm == nil {
+		cm = e.sm
+	}
+	p, err := container.PrepareMounts(ctx, e.mm, cm, e.cm, g, e.op.Meta.Cwd, e.op.Mounts, refs, func(m *pb.Mount, ref cache.ImmutableRef) (cache.MutableRef, error) {
 		desc := fmt.Sprintf("mount %s from exec %s", m.Dest, strings.Join(e.op.Meta.Args, " "))
 		return e.cm.New(ctx, ref, g, cache.WithDescription(desc))
 	}, platformOS)
@@ -494,7 +501,7 @@ func (e *ExecOp) Exec(ctx context.Context, jobCtx solver.JobContext, inputs []so
 		meta.Env = addDefaultEnvvar(meta.Env, "PATH", utilsystem.DefaultPathEnv(currentOS))
 	}
 
-	secretEnv, err := e.loadSecretEnv(ctx, g)
+	secretEnv, err := e.loadSecretEnv(ctx, cm, g)
 	if err != nil {
 		return nil, err
 	}
@@ -602,7 +609,7 @@ func (e *ExecOp) Acquire(ctx context.Context) (solver.ReleaseFunc, error) {
 	}, nil
 }
 
-func (e *ExecOp) loadSecretEnv(ctx context.Context, g session.Group) ([]string, error) {
+func (e *ExecOp) loadSecretEnv(ctx context.Context, cm session.CallerManager, g session.Group) ([]string, error) {
 	secretenv := e.op.Secretenv
 	if len(secretenv) == 0 {
 		return nil, nil
@@ -615,8 +622,8 @@ func (e *ExecOp) loadSecretEnv(ctx context.Context, g session.Group) ([]string, 
 		}
 		var dt []byte
 		var err error
-		err = e.sm.Any(ctx, g, func(ctx context.Context, _ string, caller session.Caller) error {
-			dt, err = secrets.GetSecret(ctx, caller, id)
+		err = cm.Any(ctx, g, func(ctx context.Context, _ string, caller session.Caller) error {
+			dt, err = secrets.GetSecretFromCaller(ctx, caller, id)
 			if err != nil {
 				return err
 			}

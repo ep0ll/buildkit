@@ -155,12 +155,14 @@ type SolveRequest struct {
 	FrontendInputs map[string]*pb.Definition
 	CacheImports   []CacheOptionsEntry
 	SourcePolicies []*spb.Policy
-	// SecretScope, when non-nil, restricts which secrets are accessible within
-	// this nested solve and all further nested solves it spawns. The scope can
-	// only shrink through nesting, never grow. It is automatically stamped onto
-	// the context by the bridge's Solve implementation, so individual ops do
-	// not need to forward it manually.
+	// SecretScope restricts which secrets are visible within this nested solve
+	// and all further nested solves it spawns (context-based enforcement layer).
 	SecretScope *secrets.Scope
+	// FilteredSession, when set, is a *secrets.FilteredManager that replaces
+	// the real session.Manager for all secret-fetching operations within this
+	// nested solve. Enforcement is at the gRPC transport level inside each
+	// *secrets.FilteredCaller, so it cannot be bypassed via context tricks.
+	FilteredSession *secrets.FilteredManager
 }
 
 // Clone returns a deep copy of the solve request.

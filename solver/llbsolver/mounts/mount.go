@@ -27,7 +27,7 @@ import (
 	"google.golang.org/grpc/codes"
 )
 
-func NewMountManager(name string, cm cache.Manager, sm *session.Manager) *MountManager {
+func NewMountManager(name string, cm cache.Manager, sm session.CallerManager) *MountManager {
 	return &MountManager{
 		cm:          cm,
 		sm:          sm,
@@ -38,7 +38,7 @@ func NewMountManager(name string, cm cache.Manager, sm *session.Manager) *MountM
 
 type MountManager struct {
 	cm            cache.Manager
-	sm            *session.Manager
+	sm            session.CallerManager
 	cacheMountsMu sync.Mutex
 	cacheMounts   map[string]*cacheRefShare
 	managerName   string
@@ -243,7 +243,7 @@ func (sm *sshMountInstance) IdentityMapping() *user.IdentityMapping {
 	return sm.idmap
 }
 
-func (mm *MountManager) getSecretMountable(ctx context.Context, m *pb.Mount, g session.Group) (cache.Mountable, error) {
+func (mm *MountManager) getSecretMountable(ctx context.Context, sm session.CallerManager, m *pb.Mount, g session.Group) (cache.Mountable, error) {
 	if m.SecretOpt == nil {
 		return nil, errors.Errorf("invalid secret mount options")
 	}
@@ -254,8 +254,8 @@ func (mm *MountManager) getSecretMountable(ctx context.Context, m *pb.Mount, g s
 	}
 	var dt []byte
 	var err error
-	err = mm.sm.Any(ctx, g, func(ctx context.Context, _ string, caller session.Caller) error {
-		dt, err = secrets.GetSecret(ctx, caller, id)
+	err = sm.Any(ctx, g, func(ctx context.Context, _ string, caller session.Caller) error {
+		dt, err = secrets.GetSecretFromCaller(ctx, caller, id)
 		if err != nil {
 			return err
 		}
@@ -378,8 +378,8 @@ func (mm *MountManager) MountableTmpFS(m *pb.Mount) cache.Mountable {
 	return newTmpfs(mm.cm.IdentityMapping(), m.TmpfsOpt)
 }
 
-func (mm *MountManager) MountableSecret(ctx context.Context, m *pb.Mount, g session.Group) (cache.Mountable, error) {
-	return mm.getSecretMountable(ctx, m, g)
+func (mm *MountManager) MountableSecret(ctx context.Context, sm session.CallerManager, m *pb.Mount, g session.Group) (cache.Mountable, error) {
+	return mm.getSecretMountable(ctx, sm, m, g)
 }
 
 func (mm *MountManager) MountableSSH(ctx context.Context, m *pb.Mount, g session.Group) (cache.Mountable, error) {
