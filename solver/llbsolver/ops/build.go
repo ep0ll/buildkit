@@ -4,10 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"strconv"
+	"strings"
 
 	"github.com/containerd/continuity/fs"
 	"github.com/moby/buildkit/client/llb"
 	"github.com/moby/buildkit/frontend"
+	"github.com/moby/buildkit/session/secrets"
 	"github.com/moby/buildkit/snapshot"
 	"github.com/moby/buildkit/solver"
 	"github.com/moby/buildkit/solver/llbsolver/ops/opsutils"
@@ -19,6 +22,23 @@ import (
 )
 
 const buildCacheType = "buildkit.build.v0"
+
+// Attribute keys read from pb.BuildOp.Attrs to control which secrets, if
+// any, are forwarded to a nested build.
+//
+//   - AttrBuildSecrets lists the secret IDs (comma-separated) that the
+//     nested build is allowed to fetch. Any secret ID not on this list is
+//     invisible to the nested build, as if it did not exist.
+//   - AttrBuildSecretsFull, when set to "true", disables filtering
+//     entirely and forwards every secret available on the session to the
+//     nested build. This is an explicit opt-in; it is never the default.
+//
+// If neither attribute is set, the nested build receives no secrets at
+// all: it must not silently inherit the full secret set of its parent.
+const (
+	AttrBuildSecrets     = "llb.build.secrets"
+	AttrBuildSecretsFull = "llb.build.secrets-full"
+)
 
 type BuildOp struct {
 	op *pb.BuildOp
@@ -63,6 +83,26 @@ func (b *BuildOp) CacheMap(ctx context.Context, job solver.JobContext, index int
 			PreprocessFunc    solver.PreprocessFunc
 		}, len(b.v.Inputs())),
 	}, true, nil
+}
+
+// secretsScope derives the secrets.Scope that should be in effect for the
+// nested build, based on this BuildOp's attributes. By default (no
+// attributes set) the returned scope allows no secrets whatsoever; callers
+// must explicitly allow-list secret IDs, or opt in to full forwarding.
+func (b *BuildOp) secretsScope() *secrets.Scope {
+	full, _ := strconv.ParseBool(b.op.Attrs[AttrBuildSecretsFull])
+
+	var allowed []string
+	if v := b.op.Attrs[AttrBuildSecrets]; v != "" {
+		for _, id := range strings.Split(v, ",") {
+			id = strings.TrimSpace(id)
+			if id != "" {
+				allowed = append(allowed, id)
+			}
+		}
+	}
+
+	return secrets.NewScope(allowed, full)
 }
 
 func (b *BuildOp) Exec(ctx context.Context, job solver.JobContext, inputs []solver.Result) (outputs []solver.Result, retErr error) {
@@ -138,6 +178,16 @@ func (b *BuildOp) Exec(ctx context.Context, job solver.JobContext, inputs []solv
 	f.Close()
 	lm.Unmount()
 	lm = nil
+
+	// Scope secret visibility for the nested build. By default the nested
+	// build sees no secrets; the outer build must either allow-list a
+	// subset via AttrBuildSecrets, or explicitly opt in to full forwarding
+	// via AttrBuildSecretsFull. This scope travels with ctx through the
+	// nested Solve call and is enforced centrally in
+	// session/secrets.GetSecret, so every secret-consuming op (exec
+	// mounts, secret env, etc.) in the nested build is covered without
+	// needing to be individually aware of it.
+	ctx = secrets.WithScope(ctx, b.secretsScope())
 
 	newRes, err := b.b.Solve(ctx, frontend.SolveRequest{
 		Definition: def.ToPB(),
