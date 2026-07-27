@@ -19,6 +19,7 @@ import (
 	"github.com/moby/buildkit/exporter/containerimage/exptypes"
 	"github.com/moby/buildkit/frontend"
 	dockerfileversion "github.com/moby/buildkit/frontend/dockerfile/version"
+	"github.com/moby/buildkit/session/secrets"
 	"github.com/moby/buildkit/solver"
 	"github.com/moby/buildkit/solver/errdefs"
 	"github.com/moby/buildkit/solver/llbsolver/ops"
@@ -182,6 +183,16 @@ func (b *provenanceBridge) Solve(ctx context.Context, req frontend.SolveRequest,
 	req = req.Clone()
 	if req.Definition != nil && req.Definition.Def != nil && req.Frontend != "" {
 		return nil, errors.New("cannot solve with both Definition and Frontend specified")
+	}
+
+	// Choke point: if the request carries a SecretScope, stamp it onto the
+	// context now — before any op in the nested build runs. This is the
+	// second line of defence (belt-and-suspenders alongside the context
+	// already set by BuildOp.Exec): even if an op inside the sub-build were
+	// to use a fresh context, the restriction is re-applied at the next
+	// Solve call boundary through this bridge.
+	if req.SecretScope != nil {
+		ctx = secrets.WithScope(ctx, req.SecretScope)
 	}
 
 	if req.Definition != nil && req.Definition.Def != nil {

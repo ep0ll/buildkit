@@ -9,6 +9,7 @@ import (
 
 	"github.com/moby/buildkit/client/llb"
 	"github.com/moby/buildkit/client/llb/sourceresolver"
+	"github.com/moby/buildkit/session/secrets"
 	"github.com/moby/buildkit/solver/pb"
 	"github.com/moby/buildkit/solver/result"
 	spb "github.com/moby/buildkit/sourcepolicy/pb"
@@ -154,6 +155,12 @@ type SolveRequest struct {
 	FrontendInputs map[string]*pb.Definition
 	CacheImports   []CacheOptionsEntry
 	SourcePolicies []*spb.Policy
+	// SecretScope, when non-nil, restricts which secrets are accessible within
+	// this nested solve and all further nested solves it spawns. The scope can
+	// only shrink through nesting, never grow. It is automatically stamped onto
+	// the context by the bridge's Solve implementation, so individual ops do
+	// not need to forward it manually.
+	SecretScope *secrets.Scope
 }
 
 // Clone returns a deep copy of the solve request.
@@ -187,6 +194,7 @@ func (r SolveRequest) Clone() SolveRequest {
 			}
 		}
 	}
+	// SecretScope is immutable once constructed; shallow copy is safe.
 	return r
 }
 

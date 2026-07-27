@@ -32,12 +32,19 @@ const buildCacheType = "buildkit.build.v0"
 //   - AttrBuildSecretsFull, when set to "true", disables filtering
 //     entirely and forwards every secret available on the session to the
 //     nested build. This is an explicit opt-in; it is never the default.
+//   - AttrBuildSecretAliases defines name mappings for forwarded secrets.
+//     The value is a comma-separated list of "child=parent" pairs, e.g.
+//     "db=prod_db,token=ci_token". The nested build may then fetch the
+//     secret under the child name and transparently receives the value
+//     stored under the parent name. The parent name must also appear in
+//     AttrBuildSecrets (or AttrBuildSecretsFull must be true).
 //
 // If neither attribute is set, the nested build receives no secrets at
 // all: it must not silently inherit the full secret set of its parent.
 const (
-	AttrBuildSecrets     = "llb.build.secrets"
-	AttrBuildSecretsFull = "llb.build.secrets-full"
+	AttrBuildSecrets      = "llb.build.secrets"
+	AttrBuildSecretsFull  = "llb.build.secrets-full"
+	AttrBuildSecretAliases = "llb.build.secrets.aliases"
 )
 
 type BuildOp struct {
@@ -102,7 +109,34 @@ func (b *BuildOp) secretsScope() *secrets.Scope {
 		}
 	}
 
-	return secrets.NewScope(allowed, full)
+	aliases := parseSecretAliases(b.op.Attrs[AttrBuildSecretAliases])
+	return secrets.NewScope(allowed, full, aliases)
+}
+
+// parseSecretAliases parses a comma-separated list of "child=parent" alias
+// declarations from AttrBuildSecretAliases. Malformed entries are silently
+// skipped so that a single typo does not block the entire build.
+func parseSecretAliases(v string) map[string]string {
+	if v == "" {
+		return nil
+	}
+	aliases := make(map[string]string)
+	for _, pair := range strings.Split(v, ",") {
+		pair = strings.TrimSpace(pair)
+		child, parent, ok := strings.Cut(pair, "=")
+		if !ok {
+			continue
+		}
+		child = strings.TrimSpace(child)
+		parent = strings.TrimSpace(parent)
+		if child != "" && parent != "" {
+			aliases[child] = parent
+		}
+	}
+	if len(aliases) == 0 {
+		return nil
+	}
+	return aliases
 }
 
 func (b *BuildOp) Exec(ctx context.Context, job solver.JobContext, inputs []solver.Result) (outputs []solver.Result, retErr error) {
@@ -179,18 +213,22 @@ func (b *BuildOp) Exec(ctx context.Context, job solver.JobContext, inputs []solv
 	lm.Unmount()
 	lm = nil
 
-	// Scope secret visibility for the nested build. By default the nested
-	// build sees no secrets; the outer build must either allow-list a
-	// subset via AttrBuildSecrets, or explicitly opt in to full forwarding
-	// via AttrBuildSecretsFull. This scope travels with ctx through the
-	// nested Solve call and is enforced centrally in
-	// session/secrets.GetSecret, so every secret-consuming op (exec
-	// mounts, secret env, etc.) in the nested build is covered without
-	// needing to be individually aware of it.
-	ctx = secrets.WithScope(ctx, b.secretsScope())
+	// Compute the effective scope for the nested build by intersecting the
+	// parent's scope (if any) with what this BuildOp declares. This ensures
+	// access can only shrink through nesting, never grow.
+	childScope := b.secretsScope()
+	if parent, ok := secrets.ScopeFromContext(ctx); ok {
+		childScope = secrets.Intersect(parent, childScope)
+	}
+
+	// Layer 1 — context: stamp the scope on ctx so any op inside the nested
+	// build that receives this context already has the restriction applied.
+	// This covers the common case where ctx is properly propagated.
+	ctx = secrets.WithScope(ctx, childScope)
 
 	newRes, err := b.b.Solve(ctx, frontend.SolveRequest{
-		Definition: def.ToPB(),
+		Definition:  def.ToPB(),
+		SecretScope: childScope, // Layer 2 — transport: bridge re-stamps ctx even when ops use a fresh context
 	}, g.SessionIterator().NextSession())
 	if err != nil {
 		return nil, err
