@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"sync"
+	"time"
 
 	"github.com/moby/buildkit/identity"
 	"github.com/pkg/errors"
@@ -12,8 +13,15 @@ import (
 // and resolution. When a session is scoped, a new session ID is generated.
 // When that scoped session ID is used, it resolves to a restricted version
 // of the original session.
+//
+// *Manager is embedded (not held as a private field) so ScopedManager is a
+// true superset of *Manager: every exported method of *Manager
+// (HandleHTTPRequest, HandleConn, ID, ...) is promoted and usable directly
+// on *ScopedManager. Get and Any are overridden below to add scoped-ID
+// resolution; Go's method resolution prefers the outer type's own methods
+// over promoted ones, so this is a clean override, not a naming collision.
 type ScopedManager struct {
-	inner          *Manager
+	*Manager
 	scopedSessions map[string]*scopedSession // scoped session ID -> scoped session info
 	mu             sync.Mutex
 }
@@ -27,7 +35,7 @@ type scopedSession struct {
 // NewScopedManager creates a new ScopedManager wrapping the given Manager
 func NewScopedManager(inner *Manager) *ScopedManager {
 	return &ScopedManager{
-		inner:          inner,
+		Manager:        inner,
 		scopedSessions: make(map[string]*scopedSession),
 	}
 }
@@ -49,25 +57,44 @@ func (sm *ScopedManager) RegisterScopedSession(parentID string, caller Caller) s
 
 // Get resolves a session ID. If the ID is a scoped session ID, it returns the
 // restricted caller that was registered with it. If it's a regular session ID,
-// it delegates to the inner Manager.
+// it delegates to the embedded Manager.
 func (sm *ScopedManager) Get(ctx context.Context, id string, noWait bool) (Caller, error) {
-	// Check if this is a scoped session ID
 	sm.mu.Lock()
 	scoped, ok := sm.scopedSessions[id]
 	sm.mu.Unlock()
 
 	if ok {
-		// Return the restricted caller for this scoped session
 		return scoped.caller, nil
 	}
 
-	// Otherwise, delegate to the inner manager
-	return sm.inner.Get(ctx, id, noWait)
+	return sm.Manager.Get(ctx, id, noWait)
+}
+
+// getForAny resolves a single session ID the same way Get does, but applies
+// the same 5s wait-timeout that Manager.Any uses for plain (non-scoped) IDs,
+// so that a not-yet-registered ID fails over to the next ID in the group
+// instead of blocking forever. Scoped IDs resolve immediately from the map
+// and never need the timeout.
+func (sm *ScopedManager) getForAny(ctx context.Context, id string) (Caller, error) {
+	sm.mu.Lock()
+	scoped, ok := sm.scopedSessions[id]
+	sm.mu.Unlock()
+
+	if ok {
+		return scoped.caller, nil
+	}
+
+	timeoutCtx, cancel := context.WithCancelCause(ctx)
+	timeoutCtx, _ = context.WithTimeoutCause(timeoutCtx, 5*time.Second, errors.WithStack(context.DeadlineExceeded)) //nolint:govet
+	defer cancel(errors.WithStack(context.Canceled))
+
+	return sm.Manager.Get(timeoutCtx, id, false)
 }
 
 // Any implements CallerManager by iterating over session IDs in the group.
-// For each session ID, it resolves it (handling both scoped and regular IDs)
-// and calls the provided function.
+// For each session ID, it resolves it (handling both scoped and regular IDs,
+// with the same wait-timeout behavior as Manager.Any) and calls the provided
+// function.
 func (sm *ScopedManager) Any(ctx context.Context, g Group, f func(context.Context, string, Caller) error) error {
 	if g == nil {
 		return nil
@@ -88,8 +115,7 @@ func (sm *ScopedManager) Any(ctx context.Context, g Group, f func(context.Contex
 			return errors.WithStack(ErrNoActiveSessions)
 		}
 
-		// Resolve the session ID (handles both scoped and regular IDs)
-		c, err := sm.Get(ctx, id, false)
+		c, err := sm.getForAny(ctx, id)
 		if err != nil {
 			lastErr = err
 			continue
@@ -110,9 +136,11 @@ func (sm *ScopedManager) DeleteScopedSession(scopedID string) {
 	delete(sm.scopedSessions, scopedID)
 }
 
-// Inner returns the underlying Manager
+// Inner returns the underlying, unrestricted *Manager. Kept for backward
+// compatibility with callers that used sm.Inner() before *Manager was
+// embedded; sm.Manager is equivalent.
 func (sm *ScopedManager) Inner() *Manager {
-	return sm.inner
+	return sm.Manager
 }
 
 // IsScopedID returns true if the given session ID is a scoped session ID
