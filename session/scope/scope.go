@@ -94,8 +94,15 @@ func (s *Scope[T]) Allows(id T) bool {
 // beyond what its parent already allowed.
 func Intersect[T comparable](a, b *Scope[T]) *Scope[T] {
 	switch {
+	case a == nil && b == nil:
+		return nil
+	case a == nil:
+		return b
+	case b == nil:
+		return a
 	case a.Full && b.Full:
 		out := &Scope[T]{Full: true}
+		// When both are Full, we can safely merge all aliases since everything is allowed
 		if len(a.Aliases)+len(b.Aliases) > 0 {
 			out.Aliases = make(map[T]T, len(a.Aliases)+len(b.Aliases))
 			for k, v := range a.Aliases {
@@ -111,6 +118,7 @@ func Intersect[T comparable](a, b *Scope[T]) *Scope[T] {
 		for id := range b.Allowed {
 			out.Allowed[id] = struct{}{}
 		}
+		// Only keep aliases from a that point to keys allowed by b
 		out.Aliases = mergeAliases(a.Aliases, b.Aliases, out.Allowed)
 		return out
 	case b.Full:
@@ -118,6 +126,7 @@ func Intersect[T comparable](a, b *Scope[T]) *Scope[T] {
 		for id := range a.Allowed {
 			out.Allowed[id] = struct{}{}
 		}
+		// Only keep aliases from b that point to keys allowed by a
 		out.Aliases = mergeAliases(b.Aliases, a.Aliases, out.Allowed)
 		return out
 	default:
@@ -127,6 +136,7 @@ func Intersect[T comparable](a, b *Scope[T]) *Scope[T] {
 				out.Allowed[id] = struct{}{}
 			}
 		}
+		// Only keep aliases that point to keys in the intersection
 		out.Aliases = mergeAliases(a.Aliases, b.Aliases, out.Allowed)
 		return out
 	}

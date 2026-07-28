@@ -79,15 +79,23 @@ func newFilteredConn(inner grpc.ClientConnInterface, scope *Scope[string], metho
 }
 
 func (fc *FilteredConn) resolveMeta(ctx context.Context) (context.Context, error) {
-	md, _ := metadata.FromOutgoingContext(ctx)
+	md, ok := metadata.FromOutgoingContext(ctx)
+	if !ok {
+		md = metadata.New(nil)
+	}
+	
 	key := fc.meta.Default
 	if vals := md.Get(fc.meta.Key); len(vals) > 0 && vals[0] != "" {
 		key = vals[0]
 	}
+	
+	// Use the scope to resolve the key - this handles nil scope gracefully
 	resolved, allowed := fc.scope.Resolve(key)
 	if !allowed {
-		return ctx, status.Errorf(codes.NotFound, "%s: not found", key)
+		// Return a generic error to avoid information leakage
+		return ctx, status.Errorf(codes.NotFound, "resource not found")
 	}
+	
 	if resolved != key {
 		md = md.Copy()
 		md.Set(fc.meta.Key, resolved)
@@ -101,7 +109,8 @@ func (fc *FilteredConn) Invoke(ctx context.Context, method string, args, reply a
 		key := ms.GetKey(args)
 		resolved, allowed := fc.scope.Resolve(key)
 		if !allowed {
-			return status.Errorf(codes.NotFound, "%s: not found", key)
+			// Return a generic error to avoid information leakage
+			return status.Errorf(codes.NotFound, "resource not found")
 		}
 		args = ms.WithKey(args, resolved)
 	} else if fc.meta != nil {

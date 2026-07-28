@@ -101,6 +101,9 @@ var _ session.Caller = (*FilteredCaller)(nil)
 // FilteredManager wraps a *session.Manager and implements
 // session.CallerManager, yielding *FilteredCaller instances scoped to
 // Intersect(parentScope, childScope) for every underlying caller.
+// This is a type-safe wrapper for exporter-specific scopes.
+// Note: exporter uses response filtering rather than transport-level enforcement,
+// so it doesn't use scope.FilteredManager directly.
 type FilteredManager struct {
 	inner       *session.Manager
 	scope       *Scope

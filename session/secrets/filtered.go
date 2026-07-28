@@ -90,10 +90,9 @@ func codeOf(err error) codes.Code {
 // Every session.Caller returned through Any is wrapped in a *FilteredCaller so
 // that secret access is scope-restricted at the transport level — regardless
 // of what context the consumer passes to the Any callback.
+// This is a type-safe wrapper around scope.FilteredManager for secrets-specific scopes.
 type FilteredManager struct {
-	inner       *session.Manager
-	scope       *Scope
-	parentScope *Scope
+	*scope.FilteredManager
 }
 
 // NewFilteredManager creates a FilteredManager.
@@ -102,39 +101,35 @@ type FilteredManager struct {
 // The effective scope for every caller is Intersect(parentScope, childScope).
 func NewFilteredManager(inner *session.Manager, childScope *Scope, parentScope *Scope) *FilteredManager {
 	return &FilteredManager{
-		inner:       inner,
-		scope:       childScope,
-		parentScope: parentScope,
+		FilteredManager: scope.NewFilteredManager(inner, childScope, parentScope, getSecretMethod),
 	}
-}
-
-// Inner returns the underlying *session.Manager (needed by nested builds to
-// create a new FilteredManager wrapping the real, unrestricted manager).
-func (fm *FilteredManager) Inner() *session.Manager {
-	return fm.inner
 }
 
 // Scope returns the child scope this FilteredManager was constructed with.
 // Use this to compute the effective scope for a further-nested build via
 // Intersect(fm.Scope(), childBuildScope).
 func (fm *FilteredManager) Scope() *Scope {
-	return fm.scope
-}
-
-// Any implements session.CallerManager. Every caller yielded to f is a
-// *FilteredCaller with effective scope Intersect(parentScope, childScope).
-func (fm *FilteredManager) Any(ctx context.Context, g session.Group, f func(context.Context, string, session.Caller) error) error {
-	return fm.inner.Any(ctx, g, func(ctx context.Context, id string, c session.Caller) error {
-		filtered := NewFilteredCaller(c, fm.scope, fm.parentScope)
-		return f(ctx, id, filtered)
-	})
+	return fm.FilteredManager.Scope()
 }
 
 // EffectiveScope returns the computed effective scope for this manager
 // (the intersection of parent and child scopes).
 func (fm *FilteredManager) EffectiveScope() *Scope {
-	if fm.parentScope != nil {
-		return Intersect(fm.parentScope, fm.scope)
+	if fm.FilteredManager.EffectiveScope() != nil {
+		return fm.FilteredManager.EffectiveScope()
 	}
-	return fm.scope
+	return nil
+}
+
+// Any implements session.CallerManager. Every caller yielded to f is a
+// *FilteredCaller with effective scope Intersect(parentScope, childScope).
+func (fm *FilteredManager) Any(ctx context.Context, g session.Group, f func(context.Context, string, session.Caller) error) error {
+	return fm.FilteredManager.Any(ctx, g, func(ctx context.Context, id string, c session.Caller) error {
+		// Convert the generic scope.FilteredCaller back to secrets.FilteredCaller
+		if fc, ok := c.(*scope.FilteredCaller); ok {
+			filtered := &FilteredCaller{FilteredCaller: fc}
+			return f(ctx, id, filtered)
+		}
+		return f(ctx, id, c)
+	})
 }

@@ -86,38 +86,43 @@ func (fc *FilteredCaller) AuthClient() AuthClient {
 // FilteredManager wraps a *session.Manager and implements
 // session.CallerManager, yielding *FilteredCaller instances scoped to
 // Intersect(parentScope, childScope) for every underlying caller.
+// This is a type-safe wrapper around scope.FilteredManager for auth-specific scopes.
 type FilteredManager struct {
-	inner       *session.Manager
-	scope       *Scope
-	parentScope *Scope
+	*scope.FilteredManager
 }
 
 // NewFilteredManager creates a FilteredManager. parentScope (may be nil) is
 // the host scope inherited from the parent build; childScope is declared by
 // this subbuild.
 func NewFilteredManager(inner *session.Manager, childScope, parentScope *Scope) *FilteredManager {
-	return &FilteredManager{inner: inner, scope: childScope, parentScope: parentScope}
+	return &FilteredManager{
+		FilteredManager: scope.NewFilteredManager(inner, childScope, parentScope, authMethods...),
+	}
 }
 
-// Inner returns the underlying, unrestricted *session.Manager.
-func (fm *FilteredManager) Inner() *session.Manager { return fm.inner }
-
 // Scope returns the child scope this FilteredManager was constructed with.
-func (fm *FilteredManager) Scope() *Scope { return fm.scope }
-
-// Any implements session.CallerManager.
-func (fm *FilteredManager) Any(ctx context.Context, g session.Group, f func(context.Context, string, session.Caller) error) error {
-	return fm.inner.Any(ctx, g, func(ctx context.Context, id string, c session.Caller) error {
-		return f(ctx, id, NewFilteredCaller(c, fm.scope, fm.parentScope))
-	})
+func (fm *FilteredManager) Scope() *Scope {
+	return fm.FilteredManager.Scope()
 }
 
 // EffectiveScope returns the computed effective scope for this manager.
 func (fm *FilteredManager) EffectiveScope() *Scope {
-	if fm.parentScope != nil {
-		return Intersect(fm.parentScope, fm.scope)
+	if fm.FilteredManager.EffectiveScope() != nil {
+		return fm.FilteredManager.EffectiveScope()
 	}
-	return fm.scope
+	return nil
+}
+
+// Any implements session.CallerManager.
+func (fm *FilteredManager) Any(ctx context.Context, g session.Group, f func(context.Context, string, session.Caller) error) error {
+	return fm.FilteredManager.Any(ctx, g, func(ctx context.Context, id string, c session.Caller) error {
+		// Convert the generic scope.FilteredCaller back to auth.FilteredCaller
+		if fc, ok := c.(*scope.FilteredCaller); ok {
+			filtered := &FilteredCaller{FilteredCaller: fc}
+			return f(ctx, id, filtered)
+		}
+		return f(ctx, id, c)
+	})
 }
 
 var _ session.CallerManager = (*FilteredManager)(nil)
