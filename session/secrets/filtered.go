@@ -108,10 +108,6 @@ func (fc *FilteredCaller) Scope() *Scope {
 	return fc.scope
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// GetSecretFromCaller — dispatch to transport enforcement for FilteredCaller
-// ─────────────────────────────────────────────────────────────────────────────
-
 // GetSecretFromCaller fetches a secret using the provided caller.
 //
 //   - If caller is a *FilteredCaller, scope enforcement happens at the gRPC
@@ -120,29 +116,24 @@ func (fc *FilteredCaller) Scope() *Scope {
 //   - For any other session.Caller (top-level build path): no scope is applied;
 //     the secret is fetched directly from the session.
 func GetSecretFromCaller(ctx context.Context, c session.Caller, id string) ([]byte, error) {
-	if fc, ok := c.(*FilteredCaller); ok {
-		ctx = fc.inner.Context(ctx)
-		client := fc.SecretsClient()
-		resp, err := client.GetSecret(ctx, &GetSecretRequest{ID: id})
-		if err != nil {
-			if code := codeOf(err); code == codes.Unimplemented || code == codes.NotFound {
-				return nil, errors.Wrapf(ErrNotFound, "secret %s", id)
-			}
-			return nil, err
-		}
-		return resp.Data, nil
-	}
-	// Top-level (unrestricted) path — plain session caller.
-	ctx = c.Context(ctx)
-	client := NewSecretsClient(c.Conn())
-	resp, err := client.GetSecret(ctx, &GetSecretRequest{ID: id})
-	if err != nil {
-		if code := codeOf(err); code == codes.Unimplemented || code == codes.NotFound {
-			return nil, errors.Wrapf(ErrNotFound, "secret %s", id)
-		}
-		return nil, err
-	}
-	return resp.Data, nil
+    var client SecretsClient
+
+    if fc, ok := c.(*FilteredCaller); ok {
+        ctx = fc.inner.Context(ctx)
+        client = fc.SecretsClient()
+    } else {
+        ctx = c.Context(ctx)
+        client = NewSecretsClient(c.Conn())
+    }
+
+    resp, err := client.GetSecret(ctx, &GetSecretRequest{ID: id})
+    if err != nil {
+        if code := codeOf(err); code == codes.Unimplemented || code == codes.NotFound {
+            return nil, errors.Wrapf(ErrNotFound, "secret %s", id)
+        }
+        return nil, err
+    }
+    return resp.Data, nil
 }
 
 func codeOf(err error) codes.Code {
