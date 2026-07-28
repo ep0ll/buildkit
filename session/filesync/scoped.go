@@ -1,8 +1,6 @@
 package filesync
 
 import (
-	"context"
-
 	"github.com/moby/buildkit/session"
 	"github.com/moby/buildkit/session/scope"
 )
@@ -77,51 +75,3 @@ func NewExporterFilteredCaller(inner session.Caller, childScope, parentScope *Sc
 func (fc *ExporterFilteredCaller) FileSendClient() FileSendClient {
 	return NewFileSendClient(fc.FilteredConn())
 }
-
-// FilteredManager wraps a *session.Manager and implements
-// session.CallerManager, yielding *FilteredCaller instances scoped to
-// Intersect(parentScope, childScope) for every underlying caller. Use
-// NewExporterFilteredCaller directly (there is no manager variant for it,
-// since server-side exporter pushes are not typically dispatched via
-// session.CallerManager.Any).
-// This is a type-safe wrapper around scope.FilteredManager for filesync-specific scopes.
-type FilteredManager struct {
-	*scope.FilteredManager
-}
-
-// NewFilteredManager creates a FilteredManager restricting which "dir-name"
-// values nested FSSync calls may request. parentScope (may be nil) is the
-// scope inherited from the parent build; childScope is declared by this
-// subbuild.
-func NewFilteredManager(inner *session.Manager, childScope, parentScope *Scope) *FilteredManager {
-	return &FilteredManager{
-		FilteredManager: scope.NewFilteredManagerWithMeta(inner, childScope, parentScope, sourceMeta),
-	}
-}
-
-// Scope returns the child scope this FilteredManager was constructed with.
-func (fm *FilteredManager) Scope() *Scope {
-	return fm.FilteredManager.Scope()
-}
-
-// EffectiveScope returns the computed effective scope for this manager.
-func (fm *FilteredManager) EffectiveScope() *Scope {
-	if fm.FilteredManager.EffectiveScope() != nil {
-		return fm.FilteredManager.EffectiveScope()
-	}
-	return nil
-}
-
-// Any implements session.CallerManager.
-func (fm *FilteredManager) Any(ctx context.Context, g session.Group, f func(context.Context, string, session.Caller) error) error {
-	return fm.FilteredManager.Any(ctx, g, func(ctx context.Context, id string, c session.Caller) error {
-		// Convert the generic scope.FilteredCaller back to filesync.FilteredCaller
-		if fc, ok := c.(*scope.FilteredCaller); ok {
-			filtered := &FilteredCaller{FilteredCaller: fc}
-			return f(ctx, id, filtered)
-		}
-		return f(ctx, id, c)
-	})
-}
-
-var _ session.CallerManager = (*FilteredManager)(nil)

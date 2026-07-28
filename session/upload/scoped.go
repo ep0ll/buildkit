@@ -1,8 +1,6 @@
 package upload
 
 import (
-	"context"
-
 	"github.com/moby/buildkit/session"
 	"github.com/moby/buildkit/session/scope"
 )
@@ -53,47 +51,3 @@ func NewFilteredCaller(inner session.Caller, childScope, parentScope *Scope) *Fi
 func (fc *FilteredCaller) UploadClient() UploadClient {
 	return NewUploadClient(fc.FilteredConn())
 }
-
-// FilteredManager wraps a *session.Manager and implements
-// session.CallerManager, yielding *FilteredCaller instances scoped to
-// Intersect(parentScope, childScope) for every underlying caller.
-// This is a type-safe wrapper around scope.FilteredManager for upload-specific scopes.
-type FilteredManager struct {
-	*scope.FilteredManager
-}
-
-// NewFilteredManager creates a FilteredManager. parentScope (may be nil) is
-// the path scope inherited from the parent build; childScope is declared
-// by this subbuild.
-func NewFilteredManager(inner *session.Manager, childScope, parentScope *Scope) *FilteredManager {
-	return &FilteredManager{
-		FilteredManager: scope.NewFilteredManagerWithMeta(inner, childScope, parentScope, pathMeta),
-	}
-}
-
-// Scope returns the child scope this FilteredManager was constructed with.
-func (fm *FilteredManager) Scope() *Scope {
-	return fm.FilteredManager.Scope()
-}
-
-// EffectiveScope returns the computed effective scope for this manager.
-func (fm *FilteredManager) EffectiveScope() *Scope {
-	if fm.FilteredManager.EffectiveScope() != nil {
-		return fm.FilteredManager.EffectiveScope()
-	}
-	return nil
-}
-
-// Any implements session.CallerManager.
-func (fm *FilteredManager) Any(ctx context.Context, g session.Group, f func(context.Context, string, session.Caller) error) error {
-	return fm.FilteredManager.Any(ctx, g, func(ctx context.Context, id string, c session.Caller) error {
-		// Convert the generic scope.FilteredCaller back to upload.FilteredCaller
-		if fc, ok := c.(*scope.FilteredCaller); ok {
-			filtered := &FilteredCaller{FilteredCaller: fc}
-			return f(ctx, id, filtered)
-		}
-		return f(ctx, id, c)
-	})
-}
-
-var _ session.CallerManager = (*FilteredManager)(nil)
