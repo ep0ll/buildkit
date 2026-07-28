@@ -50,7 +50,7 @@ type Mount struct {
 	WorkerRef *worker.WorkerRef
 }
 
-func NewContainer(ctx context.Context, cm cache.Manager, exec executor.Executor, sm *session.Manager, g session.Group, req NewContainerRequest) (client.Container, error) {
+func NewContainer(ctx context.Context, cm cache.Manager, exec executor.Executor, sm session.CallerManager, g session.Group, req NewContainerRequest) (client.Container, error) {
 	ctx, cancel := context.WithCancelCause(ctx)
 	eg, ctx := errgroup.WithContext(ctx)
 	platform := &opspb.Platform{
@@ -318,7 +318,7 @@ type gatewayContainer struct {
 	rootFS      executor.Mount
 	mounts      []executor.Mount
 	executor    executor.Executor
-	sm          *session.Manager
+	sm          session.CallerManager
 	group       session.Group
 	started     bool
 	errGroup    *errgroup.Group

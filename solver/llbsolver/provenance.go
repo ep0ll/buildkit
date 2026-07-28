@@ -19,6 +19,7 @@ import (
 	"github.com/moby/buildkit/exporter/containerimage/exptypes"
 	"github.com/moby/buildkit/frontend"
 	dockerfileversion "github.com/moby/buildkit/frontend/dockerfile/version"
+	"github.com/moby/buildkit/session"
 	"github.com/moby/buildkit/solver"
 	"github.com/moby/buildkit/solver/errdefs"
 	"github.com/moby/buildkit/solver/llbsolver/ops"
@@ -178,7 +179,7 @@ func (b *provenanceBridge) ResolveSourceMetadata(ctx context.Context, op *pb.Sou
 	return resp, nil
 }
 
-func (b *provenanceBridge) Solve(ctx context.Context, req frontend.SolveRequest, sid string) (res *frontend.Result, err error) {
+func (b *provenanceBridge) Solve(ctx context.Context, req frontend.SolveRequest, g session.Group) (res *frontend.Result, err error) {
 	req = req.Clone()
 	if req.Definition != nil && req.Definition.Def != nil && req.Frontend != "" {
 		return nil, errors.New("cannot solve with both Definition and Frontend specified")
@@ -208,7 +209,7 @@ func (b *provenanceBridge) Solve(ctx context.Context, req frontend.SolveRequest,
 			rootReq = b.req
 		}
 		wb := &provenanceBridge{llbBridge: b.llbBridge, req: &req, rootReq: rootReq}
-		res, err = f.Solve(ctx, wb, b.llbBridge, req.FrontendOpt, req.FrontendInputs, sid, b.sm)
+		res, err = f.Solve(ctx, wb, b.llbBridge, req.FrontendOpt, req.FrontendInputs, g, b.sm)
 		if err != nil {
 			fe := errdefs.Frontend{
 				Name:   req.Frontend,

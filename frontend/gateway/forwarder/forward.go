@@ -28,12 +28,12 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-func LLBBridgeToGatewayClient(ctx context.Context, llbBridge frontend.FrontendLLBBridge, exec executor.Executor, opts map[string]string, inputs map[string]*opspb.Definition, w worker.Infos, sid string, sm *session.Manager) (*BridgeClient, error) {
+func LLBBridgeToGatewayClient(ctx context.Context, llbBridge frontend.FrontendLLBBridge, exec executor.Executor, opts map[string]string, inputs map[string]*opspb.Definition, w worker.Infos, g session.Group, sm session.CallerManager) (*BridgeClient, error) {
 	bc := &BridgeClient{
 		opts:              opts,
 		inputs:            inputs,
 		FrontendLLBBridge: llbBridge,
-		sid:               sid,
+		g:                 g,
 		sm:                sm,
 		workers:           w,
 		workerRefByID:     make(map[string]*worker.WorkerRef),
@@ -49,8 +49,8 @@ type BridgeClient struct {
 	mu            sync.Mutex
 	opts          map[string]string
 	inputs        map[string]*opspb.Definition
-	sid           string
-	sm            *session.Manager
+	g             session.Group          // was: sid string
+	sm            session.CallerManager  // was: sm *session.Manager
 	refs          []*ref
 	workers       worker.Infos
 	workerRefByID map[string]*worker.WorkerRef
@@ -63,7 +63,7 @@ type BridgeClient struct {
 }
 
 func (c *BridgeClient) Solve(ctx context.Context, req client.SolveRequest) (*client.Result, error) {
-	res, err := c.FrontendLLBBridge.Solve(ctx, req, c.sid)
+	res, err := c.FrontendLLBBridge.Solve(ctx, req, c.g)
 	if err != nil {
 		return nil, c.wrapSolveError(err)
 	}
@@ -77,7 +77,7 @@ func (c *BridgeClient) Solve(ctx context.Context, req client.SolveRequest) (*cli
 
 	c.mu.Lock()
 	cRes, err := result.ConvertResult(res, func(r solver.ResultProxy) (client.Reference, error) {
-		rr, err := c.newRef(r, session.NewGroup(c.sid))
+		rr, err := c.newRef(r, c.g)
 		if err != nil {
 			return nil, err
 		}
@@ -110,12 +110,23 @@ func (c *BridgeClient) loadBuildOpts() client.BuildOpts {
 
 	return client.BuildOpts{
 		Opts:      c.opts,
-		SessionID: c.sid,
+		SessionID: FirstSessionID(c.g), // was: c.sid — see helper below
 		Workers:   workers,
 		Product:   apicaps.ExportedProduct,
 		Caps:      gwpb.Caps.CapSet(gwpb.Caps.All()),
 		LLBCaps:   opspb.Caps.CapSet(opspb.Caps.All()),
 	}
+}
+
+func FirstSessionID(g session.Group) string {
+	if g == nil {
+		return ""
+	}
+	it := g.SessionIterator()
+	if it == nil {
+		return ""
+	}
+	return it.NextSession()
 }
 
 func (c *BridgeClient) BuildOpts() client.BuildOpts {
@@ -324,7 +335,7 @@ func (c *BridgeClient) NewContainer(ctx context.Context, req client.NewContainer
 		return nil, err
 	}
 
-	group := session.NewGroup(c.sid)
+	group := c.g
 	ctr, err := container.NewContainer(ctx, cm, c.executor, c.sm, group, ctrReq)
 	if err != nil {
 		return nil, err

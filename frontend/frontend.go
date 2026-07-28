@@ -22,16 +22,18 @@ const (
 )
 
 type Result = result.Result[solver.ResultProxy]
-
 type Attestation = result.Attestation[solver.ResultProxy]
 
 type Frontend interface {
-	Solve(ctx context.Context, llb FrontendLLBBridge, exec executor.Executor, opt map[string]string, inputs map[string]*pb.Definition, sid string, sm *session.Manager) (*Result, error)
+	// g replaces sid string; sm replaces *session.Manager (only Any() is used
+	// by frontends/gateway code paths, so the interface is sufficient).
+	Solve(ctx context.Context, llb FrontendLLBBridge, exec executor.Executor, opt map[string]string, inputs map[string]*pb.Definition, g session.Group, sm session.CallerManager) (*Result, error)
 }
 
 type FrontendLLBBridge interface {
 	sourceresolver.MetaResolver
-	Solve(ctx context.Context, req SolveRequest, sid string) (*Result, error)
+	// g replaces sid string.
+	Solve(ctx context.Context, req SolveRequest, g session.Group) (*Result, error)
 	Warn(ctx context.Context, dgst digest.Digest, msg string, opts WarnOpts) error
 }
 

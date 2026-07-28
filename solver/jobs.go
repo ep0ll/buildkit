@@ -162,14 +162,23 @@ func (g *sessionGroup) NextSession() string {
 	if g.mode == 0 {
 		g.mu.Lock()
 		for j := range g.jobs {
-			if j.SessionID != "" {
-				if _, ok := g.visited[j.SessionID]; ok {
+			if j.Session() != nil {
+				SessionID := j.Session().SessionIterator().NextSession()
+				if _, ok := g.visited[SessionID]; ok {
 					continue
 				}
-				g.visited[j.SessionID] = struct{}{}
+				g.visited[SessionID] = struct{}{}
 				g.mu.Unlock()
-				return j.SessionID
+				return SessionID
 			}
+			// if j.SessionID != "" {
+			// 	if _, ok := g.visited[j.SessionID]; ok {
+			// 		continue
+			// 	}
+			// 	g.visited[j.SessionID] = struct{}{}
+			// 	g.mu.Unlock()
+			// 	return j.SessionID
+			// }
 		}
 		g.mu.Unlock()
 		g.mode = 1
@@ -432,7 +441,7 @@ type Job struct {
 	resolverCache *resolverCache
 
 	progressCloser func(error)
-	SessionID      string
+	// SessionID      string
 	uniqueID       string // unique ID is used for provenance. We use a different field that client can't control
 }
 
@@ -754,6 +763,7 @@ func (jl *Solver) NewJob(id string) (*Job, error) {
 		startedTime:    time.Now(),
 		uniqueID:       identity.NewID(),
 		resolverCache:  newResolverCache(),
+		g: jl.g,
 	}
 	jl.jobs[id] = j
 
@@ -991,7 +1001,8 @@ func (j *Job) InContext(ctx context.Context, f func(context.Context, JobContext)
 }
 
 func (j *Job) Session() session.Group {
-	return session.NewGroup(j.SessionID)
+	return j.g
+	// return session.NewGroup(j.SessionID)
 }
 
 

@@ -250,7 +250,7 @@ func (b *BuildOp) Exec(ctx context.Context, job solver.JobContext, inputs []solv
 	newRes, err := b.b.Solve(ctx, frontend.SolveRequest{
 		Definition:      def.ToPB(),
 		FilteredSession: filteredMgr, // bridge will call SetCallerManager(filteredMgr)
-	}, g.SessionIterator().NextSession())
+	}, g)
 
 	if err != nil {
 		return nil, err

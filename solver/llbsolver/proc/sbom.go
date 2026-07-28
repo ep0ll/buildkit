@@ -76,7 +76,7 @@ func SBOMProcessor(scannerRef string, scannerPlatform ocispecs.Platform, useCach
 
 				r, err := s.Bridge(j).Solve(ctx, frontend.SolveRequest{
 					Definition: def.ToPB(),
-				}, j.SessionID)
+				}, j.Session())
 				if err != nil {
 					return nil, err
 				}

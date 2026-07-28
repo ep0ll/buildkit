@@ -12,10 +12,7 @@ import (
 )
 
 func NewGatewayForwarder(w worker.Infos, f client.BuildFunc) frontend.Frontend {
-	return &GatewayForwarder{
-		workers: w,
-		f:       f,
-	}
+	return &GatewayForwarder{workers: w, f: f}
 }
 
 type GatewayForwarder struct {
@@ -23,20 +20,16 @@ type GatewayForwarder struct {
 	f       client.BuildFunc
 }
 
-func (gf *GatewayForwarder) Solve(ctx context.Context, llbBridge frontend.FrontendLLBBridge, exec executor.Executor, opts map[string]string, inputs map[string]*pb.Definition, sid string, sm *session.Manager) (retRes *frontend.Result, retErr error) {
-	c, err := LLBBridgeToGatewayClient(ctx, llbBridge, exec, opts, inputs, gf.workers, sid, sm)
+func (gf *GatewayForwarder) Solve(ctx context.Context, llbBridge frontend.FrontendLLBBridge, exec executor.Executor, opts map[string]string, inputs map[string]*pb.Definition, g session.Group, sm session.CallerManager) (retRes *frontend.Result, retErr error) {
+	c, err := LLBBridgeToGatewayClient(ctx, llbBridge, exec, opts, inputs, gf.workers, g, sm)
 	if err != nil {
 		return nil, err
 	}
-
-	defer func() {
-		c.discard(retErr)
-	}()
+	defer func() { c.discard(retErr) }()
 
 	res, err := gf.f(ctx, c)
 	if err != nil {
 		return nil, err
 	}
-
 	return c.toFrontendResult(res)
 }

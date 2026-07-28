@@ -106,7 +106,7 @@ func (gf *gatewayFrontend) checkSourceIsAllowed(source string) error {
 	return errors.Errorf("'%s' is not an allowed gateway source", source)
 }
 
-func (gf *gatewayFrontend) Solve(ctx context.Context, llbBridge frontend.FrontendLLBBridge, exec executor.Executor, opts map[string]string, inputs map[string]*opspb.Definition, sid string, sm *session.Manager) (*frontend.Result, error) {
+func (gf *gatewayFrontend) Solve(ctx context.Context, llbBridge frontend.FrontendLLBBridge, exec executor.Executor, opts map[string]string, inputs map[string]*opspb.Definition, g session.Group, sm session.CallerManager) (*frontend.Result, error) {
 	if _, isDevel := opts[frontend.KeyDevelDeprecated]; isDevel {
 		return nil, errors.New("development gateway is no longer supported")
 	}
@@ -128,7 +128,7 @@ func (gf *gatewayFrontend) Solve(ctx context.Context, llbBridge frontend.Fronten
 		return nil, err
 	}
 
-	c, err := forwarder.LLBBridgeToGatewayClient(ctx, llbBridge, exec, opts, inputs, gf.workers, sid, sm)
+	c, err := forwarder.LLBBridgeToGatewayClient(ctx, llbBridge, exec, opts, inputs, gf.workers, g, sm)
 	if err != nil {
 		return nil, err
 	}
@@ -192,9 +192,7 @@ func (gf *gatewayFrontend) Solve(ctx context.Context, llbBridge frontend.Fronten
 		return nil, err
 	}
 
-	res, err := llbBridge.Solve(ctx, frontend.SolveRequest{
-		Definition: def.ToPB(),
-	}, sid)
+	res, err := llbBridge.Solve(ctx, frontend.SolveRequest{Definition: def.ToPB()}, g)
 	if err != nil {
 		return nil, err
 	}
@@ -216,7 +214,7 @@ func (gf *gatewayFrontend) Solve(ctx context.Context, llbBridge frontend.Fronten
 	if !ok {
 		return nil, errors.Errorf("invalid ref: %T", r.Sys())
 	}
-	rootFS, err = workerRef.Worker.CacheManager().New(ctx, workerRef.ImmutableRef, session.NewGroup(sid))
+	rootFS, err = workerRef.Worker.CacheManager().New(ctx, workerRef.ImmutableRef, g) // was session.NewGroup(sid)
 	if err != nil {
 		return nil, err
 	}
@@ -240,7 +238,7 @@ func (gf *gatewayFrontend) Solve(ctx context.Context, llbBridge frontend.Fronten
 		i++
 	}
 
-	env = append(env, "BUILDKIT_SESSION_ID="+sid)
+	env = append(env, "BUILDKIT_SESSION_ID="+forwarder.FirstSessionID(g)) // was sid
 
 	dt, err := json.Marshal(gf.workers.WorkerInfos())
 	if err != nil {
@@ -277,7 +275,7 @@ func (gf *gatewayFrontend) Solve(ctx context.Context, llbBridge frontend.Fronten
 		}
 	}
 
-	lbf, ctx := serveLLBBridgeForwarder(ctx, llbBridge, exec, gf.workers, inputs, sid, sm)
+	lbf, ctx := serveLLBBridgeForwarder(ctx, llbBridge, exec, gf.workers, inputs, g, sm)
 	defer lbf.conn.Close()
 	defer lbf.Discard()
 
@@ -293,7 +291,7 @@ func (gf *gatewayFrontend) Solve(ctx context.Context, llbBridge frontend.Fronten
 		mnts = append(mnts, *mdmnt)
 	}
 
-	_, err = exec.Run(ctx, "", container.MountWithSession(rootFS, session.NewGroup(sid)), mnts, executor.ProcessInfo{Meta: meta, Stdin: lbf.Stdin, Stdout: lbf.Stdout, Stderr: os.Stderr}, nil)
+	_, err = exec.Run(ctx, "", container.MountWithSession(rootFS, g), mnts, executor.ProcessInfo{Meta: meta, Stdin: lbf.Stdin, Stdout: lbf.Stdout, Stderr: os.Stderr}, nil)
 	if err != nil {
 		if errdefs.IsCanceled(ctx, err) && lbf.isErrServerClosed {
 			err = errors.Errorf("frontend grpc server closed unexpectedly")
@@ -427,11 +425,11 @@ func (lbf *llbBridgeForwarder) Result() (*frontend.Result, error) {
 	return lbf.result, nil
 }
 
-func NewBridgeForwarder(ctx context.Context, llbBridge frontend.FrontendLLBBridge, exec executor.Executor, workers worker.Infos, inputs map[string]*opspb.Definition, sid string, sm *session.Manager) LLBBridgeForwarder {
-	return newBridgeForwarder(ctx, llbBridge, exec, workers, inputs, sid, sm)
+func NewBridgeForwarder(ctx context.Context, llbBridge frontend.FrontendLLBBridge, exec executor.Executor, workers worker.Infos, inputs map[string]*opspb.Definition, g session.Group, sm session.CallerManager) LLBBridgeForwarder {
+	return newBridgeForwarder(ctx, llbBridge, exec, workers, inputs, g, sm)
 }
 
-func newBridgeForwarder(ctx context.Context, llbBridge frontend.FrontendLLBBridge, exec executor.Executor, workers worker.Infos, inputs map[string]*opspb.Definition, sid string, sm *session.Manager) *llbBridgeForwarder {
+func newBridgeForwarder(ctx context.Context, llbBridge frontend.FrontendLLBBridge, exec executor.Executor, workers worker.Infos, inputs map[string]*opspb.Definition, g session.Group, sm session.CallerManager) *llbBridgeForwarder {
 	lbf := &llbBridgeForwarder{
 		callCtx:       ctx,
 		llbBridge:     llbBridge,
@@ -441,8 +439,8 @@ func newBridgeForwarder(ctx context.Context, llbBridge frontend.FrontendLLBBridg
 		pipe:          newPipe(),
 		workers:       workers,
 		inputs:        inputs,
-		sid:           sid,
-		sm:            sm,
+		g:             g,   // was: sid string
+		sm:            sm,  // was: *session.Manager
 		ctrs:          map[string]gwclient.Container{},
 		mounts:        map[string]snapshot.Mounter{},
 		executor:      exec,
@@ -450,9 +448,9 @@ func newBridgeForwarder(ctx context.Context, llbBridge frontend.FrontendLLBBridg
 	return lbf
 }
 
-func serveLLBBridgeForwarder(ctx context.Context, llbBridge frontend.FrontendLLBBridge, exec executor.Executor, workers worker.Infos, inputs map[string]*opspb.Definition, sid string, sm *session.Manager) (*llbBridgeForwarder, context.Context) {
+func serveLLBBridgeForwarder(ctx context.Context, llbBridge frontend.FrontendLLBBridge, exec executor.Executor, workers worker.Infos, inputs map[string]*opspb.Definition, g session.Group, sm session.CallerManager) (*llbBridgeForwarder, context.Context) {
 	ctx, cancel := context.WithCancelCause(ctx)
-	lbf := newBridgeForwarder(ctx, llbBridge, exec, workers, inputs, sid, sm)
+	lbf := newBridgeForwarder(ctx, llbBridge, exec, workers, inputs, g, sm)
 	serverOpt := []grpc.ServerOption{
 		grpc.UnaryInterceptor(grpcerrors.UnaryServerInterceptor),
 		grpc.StreamInterceptor(grpcerrors.StreamServerInterceptor),
@@ -554,8 +552,9 @@ type llbBridgeForwarder struct {
 	workers           worker.Infos
 	inputs            map[string]*opspb.Definition
 	isErrServerClosed bool
-	sid               string
-	sm                *session.Manager
+	g session.Group
+	// sid               string
+	sm                session.CallerManager
 	executor          executor.Executor
 	*pipe
 	ctrs     map[string]gwclient.Container
@@ -749,7 +748,7 @@ func (lbf *llbBridgeForwarder) Solve(ctx context.Context, req *pb.SolveRequest) 
 		FrontendInputs: req.FrontendInputs,
 		CacheImports:   cacheImports,
 		SourcePolicies: req.SourcePolicies,
-	}, lbf.sid)
+	}, lbf.g)
 	if err != nil {
 		return nil, lbf.wrapSolveError(err)
 	}
@@ -905,7 +904,7 @@ func (lbf *llbBridgeForwarder) getMounter(ctx context.Context, id string, ref ca
 	var mountable snapshot.Mountable
 	if ref != nil {
 		var err error
-		mountable, err = ref.Mount(ctx, true, session.NewGroup(lbf.sid))
+		mountable, err = ref.Mount(ctx, true, lbf.g)
 		if err != nil {
 			return nil, err
 		}
@@ -1147,7 +1146,7 @@ func (lbf *llbBridgeForwarder) NewContainer(ctx context.Context, in *pb.NewConta
 
 	// Not using `ctx` here because it will get cancelled as soon as NewContainer returns
 	// and we want the context to live for the duration of the container.
-	group := session.NewGroup(lbf.sid)
+	group := lbf.g
 
 	cm, err := lbf.workers.DefaultCacheManager()
 	if err != nil {

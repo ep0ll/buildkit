@@ -28,6 +28,7 @@ type Iterator interface {
 // object level, independent of the context that is passed.
 type CallerManager interface {
 	Any(ctx context.Context, g Group, f func(context.Context, string, Caller) error) error
+	// Get(ctx context.Context, id string, noWait bool) (Caller, error)
 }
 
 
