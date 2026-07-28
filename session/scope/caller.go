@@ -12,9 +12,10 @@ import (
 // means the restriction cannot be bypassed by swapping the context (e.g.
 // context.Background()) the way a context-value-based check could be.
 //
-// Service packages (secrets, auth, ...) embed *FilteredCaller in their own
-// FilteredCaller type to add a service-specific typed client accessor (e.g.
-// SecretsClient(), AuthClient()) built on top of FilteredConn().
+// Service packages (secrets, auth, sshforward, filesync, upload, content,
+// ...) embed *FilteredCaller in their own FilteredCaller type to add a
+// service-specific typed client accessor (e.g. SecretsClient(), AuthClient(),
+// SSHClient()) built on top of FilteredConn().
 type FilteredCaller struct {
 	inner session.Caller
 	scope *Scope[string]
@@ -23,7 +24,7 @@ type FilteredCaller struct {
 
 // NewFilteredCaller wraps inner with effective scope
 // Intersect(parentScope, childScope) (or just childScope if parentScope is
-// nil), enforced for the given method rules.
+// nil), enforced for the given message-based method rules.
 func NewFilteredCaller(inner session.Caller, childScope, parentScope *Scope[string], methods ...MethodScope) *FilteredCaller {
 	effective := childScope
 	if parentScope != nil {
@@ -33,6 +34,22 @@ func NewFilteredCaller(inner session.Caller, childScope, parentScope *Scope[stri
 		inner: inner,
 		scope: effective,
 		conn:  NewFilteredConn(inner.Conn(), effective, methods...),
+	}
+}
+
+// NewFilteredCallerWithMeta is like NewFilteredCaller but also (or instead)
+// enforces a MetadataScope fallback, for services that key their target
+// resource via outgoing gRPC metadata rather than a request field — this
+// covers unary calls keyed by metadata as well as streaming RPCs.
+func NewFilteredCallerWithMeta(inner session.Caller, childScope, parentScope *Scope[string], meta MetadataScope, methods ...MethodScope) *FilteredCaller {
+	effective := childScope
+	if parentScope != nil {
+		effective = Intersect(parentScope, childScope)
+	}
+	return &FilteredCaller{
+		inner: inner,
+		scope: effective,
+		conn:  NewFilteredMetaConn(inner.Conn(), effective, meta, methods...),
 	}
 }
 
@@ -73,14 +90,20 @@ type FilteredManager struct {
 	scope       *Scope[string]
 	parentScope *Scope[string]
 	methods     []MethodScope
+	meta        *MetadataScope
 }
 
-// NewFilteredManager creates a FilteredManager. parentScope (may be nil) is
-// the scope inherited from the parent; childScope is declared by this
-// caller. methods are the MethodScope rules to enforce for every yielded
-// caller.
+// NewFilteredManager creates a FilteredManager enforcing message-based
+// method rules only. parentScope (may be nil) is the scope inherited from
+// the parent; childScope is declared by this caller.
 func NewFilteredManager(inner *session.Manager, childScope, parentScope *Scope[string], methods ...MethodScope) *FilteredManager {
 	return &FilteredManager{inner: inner, scope: childScope, parentScope: parentScope, methods: methods}
+}
+
+// NewFilteredManagerWithMeta is like NewFilteredManager but also enforces a
+// MetadataScope fallback for every yielded caller.
+func NewFilteredManagerWithMeta(inner *session.Manager, childScope, parentScope *Scope[string], meta MetadataScope, methods ...MethodScope) *FilteredManager {
+	return &FilteredManager{inner: inner, scope: childScope, parentScope: parentScope, methods: methods, meta: &meta}
 }
 
 // Inner returns the underlying, unrestricted *session.Manager.
@@ -92,7 +115,12 @@ func (fm *FilteredManager) Scope() *Scope[string] { return fm.scope }
 // Any implements session.CallerManager.
 func (fm *FilteredManager) Any(ctx context.Context, g session.Group, f func(context.Context, string, session.Caller) error) error {
 	return fm.inner.Any(ctx, g, func(ctx context.Context, id string, c session.Caller) error {
-		filtered := NewFilteredCaller(c, fm.scope, fm.parentScope, fm.methods...)
+		var filtered *FilteredCaller
+		if fm.meta != nil {
+			filtered = NewFilteredCallerWithMeta(c, fm.scope, fm.parentScope, *fm.meta, fm.methods...)
+		} else {
+			filtered = NewFilteredCaller(c, fm.scope, fm.parentScope, fm.methods...)
+		}
 		return f(ctx, id, filtered)
 	})
 }
