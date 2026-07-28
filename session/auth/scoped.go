@@ -120,23 +120,4 @@ func (fm *FilteredManager) EffectiveScope() *Scope {
 	return fm.scope
 }
 
-// RegisterScopedSession creates a scoped session ID for the given parent session ID
-// with the specified auth scope. It registers the scoped session with the
-// ScopedManager and returns the new session ID.
-func RegisterScopedSession(sm *session.ScopedManager, parentID string, childScope, parentScope *Scope) (string, error) {
-	// Get the parent caller from the inner manager
-	parentCaller, err := sm.Inner().Get(context.Background(), parentID, false)
-	if err != nil {
-		return "", err
-	}
-
-	// Create the restricted caller
-	filteredCaller := NewFilteredCaller(parentCaller, childScope, parentScope)
-
-	// Register the scoped session
-	scopedID := sm.RegisterScopedSession(parentID, filteredCaller)
-
-	return scopedID, nil
-}
-
 var _ session.CallerManager = (*FilteredManager)(nil)
